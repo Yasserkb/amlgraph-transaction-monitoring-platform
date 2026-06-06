@@ -1,0 +1,220 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: amlgraph-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-amlgraph}
+      POSTGRES_USER: ${POSTGRES_USER:-amlgraph}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-amlgraph}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-amlgraph} -d ${POSTGRES_DB:-amlgraph}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: amlgraph-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: amlgraph-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: amlgraph-redis
+    ports:
+      - "6379:6379"
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: amlgraph-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/amlgraph_password}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    container_name: amlgraph-gateway
+    environment:
+      SERVER_PORT: 8080
+      TRANSACTION_SERVICE_URL: http://transaction-service:8081
+      ALERT_SERVICE_URL: http://alert-service:8083
+      CUSTOMER_SERVICE_URL: http://customer-service:8084
+      GRAPH_SERVICE_URL: http://graph-service:8085
+      AI_SERVICE_URL: http://ai-service:8087
+      AMLGRAPH_SECURITY_ENABLED: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - transaction-service
+      - alert-service
+      - customer-service
+      - graph-service
+      - ai-service
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: services/transaction-service/Dockerfile
+    container_name: amlgraph-transaction-service
+    environment:
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-amlgraph}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-amlgraph}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-amlgraph}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  rule-engine-service:
+    build:
+      context: .
+      dockerfile: services/rule-engine-service/Dockerfile
+    container_name: amlgraph-rule-engine-service
+    environment:
+      SERVER_PORT: 8082
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8082:8082"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  alert-service:
+    build:
+      context: .
+      dockerfile: services/alert-service/Dockerfile
+    container_name: amlgraph-alert-service
+    environment:
+      SERVER_PORT: 8083
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-amlgraph}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-amlgraph}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-amlgraph}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  customer-service:
+    build:
+      context: .
+      dockerfile: services/customer-service/Dockerfile
+    container_name: amlgraph-customer-service
+    environment:
+      SERVER_PORT: 8084
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-amlgraph}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-amlgraph}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-amlgraph}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8084:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  graph-service:
+    build:
+      context: .
+      dockerfile: services/graph-service/Dockerfile
+    container_name: amlgraph-graph-service
+    environment:
+      SERVER_PORT: 8085
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: amlgraph_password
+    ports:
+      - "8085:8085"
+    depends_on:
+      - neo4j
+
+  ai-service:
+    build:
+      context: services/ai-service
+    container_name: amlgraph-ai-service
+    environment:
+      PORT: 8087
+    ports:
+      - "8087:8087"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8080/api
+    container_name: amlgraph-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: amlgraph-prometheus
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: amlgraph-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  grafana_data:

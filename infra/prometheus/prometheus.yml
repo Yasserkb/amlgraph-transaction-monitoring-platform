@@ -1,0 +1,33 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["gateway:8080"]
+
+  - job_name: transaction-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["transaction-service:8081"]
+
+  - job_name: rule-engine-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["rule-engine-service:8082"]
+
+  - job_name: alert-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["alert-service:8083"]
+
+  - job_name: customer-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["customer-service:8084"]
+
+  - job_name: graph-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["graph-service:8085"]
