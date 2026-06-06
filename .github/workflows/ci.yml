@@ -1,0 +1,131 @@
+name: amlgraph-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Run Maven tests
+        run: mvn -B -ntp -f services/pom.xml test
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install
+      - name: Run tests
+        run: pnpm test
+      - name: Build frontend
+        run: pnpm build
+        env:
+          VITE_API_BASE_URL: http://localhost:8080/api
+
+  ai:
+    name: AI service tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run pytest
+        run: pytest
+
+  docker:
+    name: Build Docker images
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, ai]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        image:
+          - name: gateway
+            dockerfile: services/gateway/Dockerfile
+          - name: transaction-service
+            dockerfile: services/transaction-service/Dockerfile
+          - name: rule-engine-service
+            dockerfile: services/rule-engine-service/Dockerfile
+          - name: alert-service
+            dockerfile: services/alert-service/Dockerfile
+          - name: customer-service
+            dockerfile: services/customer-service/Dockerfile
+          - name: graph-service
+            dockerfile: services/graph-service/Dockerfile
+          - name: frontend
+            dockerfile: frontend/Dockerfile
+          - name: ai-service
+            dockerfile: services/ai-service/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.name == 'ai-service' && 'services/ai-service' || '.' }}
+          file: ${{ matrix.image.dockerfile }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/amlgraph-${{ matrix.image.name }}:${{ github.sha }}
+
+  vercel:
+    name: Deploy frontend to Vercel
+    runs-on: ubuntu-latest
+    needs: [frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install Vercel CLI
+        run: pnpm add -g vercel
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Build with Vercel
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy prebuilt output
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
