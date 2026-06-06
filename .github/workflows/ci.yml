@@ -138,6 +138,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set lowercase GHCR owner
+        id: ghcr
+        shell: bash
+        run: |
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -154,7 +160,7 @@ jobs:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/amlgraph-${{ matrix.image.name }}:${{ github.sha }}
+          tags: ghcr.io/${{ steps.ghcr.outputs.owner }}/amlgraph-${{ matrix.image.name }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -180,6 +186,7 @@ jobs:
 
       - name: Check Vercel secrets
         id: vercel-secrets
+        shell: bash
         run: |
           if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
