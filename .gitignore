@@ -1,0 +1,66 @@
+.DS_Store
+.idea/
+.vscode/
+*.iml
+.env
+
+# Java
+**/target/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vercel/
+
+# Python
+services/ai-service/.venv/
+services/ai-service/__pycache__/
+services/ai-service/.pytest_cache/
+*.pyc
+
+# Logs
+*.log
+
+.env
+frontend/node_modules/
+frontend/dist/
+services/**/target/
+services/ai-service/.venv/
+__pycache__/
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Java / Maven
+services/**/target/
+target/
+
+# Python
+services/ai-service/.venv/
+services/ai-service/__pycache__/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker / local
+docker-data/
