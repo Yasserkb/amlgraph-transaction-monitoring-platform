@@ -85,4 +85,5 @@ export interface AiExplainResponse {
   why_alert_fired: string[];
   risk_indicators: string[];
   recommended_actions: string[];
+  provider?: string;
 }

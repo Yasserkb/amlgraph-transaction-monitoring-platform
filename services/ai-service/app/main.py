@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from typing import List, Optional
@@ -7,9 +8,10 @@ import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("amlgraph-ai")
 
-app = FastAPI(title="AMLGraph AI Investigation Assistant", version="0.2.0")
-
+app = FastAPI(title="AMLGraph AI Investigation Assistant", version="0.3.0")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
@@ -51,25 +53,33 @@ def health() -> dict[str, str]:
         "status": "UP",
         "provider": AI_PROVIDER,
         "model": OLLAMA_MODEL,
+        "ollamaBaseUrl": OLLAMA_BASE_URL,
     }
 
 
 @app.post("/api/ai/explain", response_model=ExplainResponse)
 def explain(request: ExplainRequest) -> ExplainResponse:
+    logger.info("Received explain request for caseId=%s", request.caseId)
+
     if AI_PROVIDER.lower() == "ollama":
         ollama_response = call_ollama_for_explanation(request)
         if ollama_response is not None:
             return ollama_response
 
+    logger.warning("Using fallback explanation for caseId=%s", request.caseId)
     return fallback_explanation(request)
 
 
 @app.post("/api/ai/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
+    logger.info("Received chat request for caseId=%s", request.caseId)
+
     if AI_PROVIDER.lower() == "ollama":
         ollama_answer = call_ollama_for_chat(request)
         if ollama_answer is not None:
             return ChatResponse(answer=ollama_answer, provider=f"ollama:{OLLAMA_MODEL}")
+
+    logger.warning("Using fallback chat response for caseId=%s", request.caseId)
 
     return ChatResponse(
         answer=(
@@ -91,30 +101,36 @@ def call_ollama_for_explanation(request: ExplainRequest) -> Optional[ExplainResp
                 "model": OLLAMA_MODEL,
                 "prompt": prompt,
                 "stream": False,
+                "format": "json",
                 "options": {
-                    "temperature": 0.2,
-                    "num_predict": 700,
+                    "temperature": 0.1,
+                    "num_predict": 500,
                 },
             },
-            timeout=60,
+            timeout=120,
         )
+
         response.raise_for_status()
 
-        raw_text = response.json().get("response", "")
+        raw_text = response.json().get("response", "").strip()
+        logger.info("Raw Ollama explanation response: %s", raw_text)
+
         parsed = extract_json(raw_text)
 
         if parsed is None:
+            logger.warning("Could not parse Ollama JSON response for caseId=%s", request.caseId)
             return None
 
         return ExplainResponse(
-            summary=parsed.get("summary", fallback_explanation(request).summary),
+            summary=str(parsed.get("summary") or fallback_explanation(request).summary),
             why_alert_fired=ensure_list(parsed.get("why_alert_fired")),
             risk_indicators=ensure_list(parsed.get("risk_indicators")),
             recommended_actions=ensure_list(parsed.get("recommended_actions")),
             provider=f"ollama:{OLLAMA_MODEL}",
         )
 
-    except Exception:
+    except Exception as exc:
+        logger.exception("Ollama explanation call failed: %s", exc)
         return None
 
 
@@ -144,13 +160,18 @@ Do not invent facts that are not provided.
                     "num_predict": 500,
                 },
             },
-            timeout=60,
+            timeout=120,
         )
+
         response.raise_for_status()
+
         answer = response.json().get("response", "").strip()
+        logger.info("Raw Ollama chat response: %s", answer)
+
         return answer if answer else None
 
-    except Exception:
+    except Exception as exc:
+        logger.exception("Ollama chat call failed: %s", exc)
         return None
 
 
@@ -158,7 +179,7 @@ def build_explanation_prompt(request: ExplainRequest) -> str:
     return f"""
 You are an AML investigation assistant for a banking transaction monitoring platform.
 
-Generate an analyst-ready explanation for the following AML case.
+Generate an analyst-ready explanation for this AML case.
 
 Case context:
 - Case ID: {request.caseId}
@@ -170,7 +191,10 @@ Case context:
 - Customer risk level: {request.customerRiskLevel}
 - Triggered rules: {", ".join(request.ruleNames) if request.ruleNames else "not provided"}
 
-Return ONLY valid JSON with this exact structure:
+Return valid JSON only.
+
+The JSON must use exactly this structure:
+
 {{
   "summary": "short analyst summary",
   "why_alert_fired": ["reason 1", "reason 2"],
@@ -179,20 +203,30 @@ Return ONLY valid JSON with this exact structure:
 }}
 
 Rules:
-- Do not add markdown.
-- Do not add explanations outside JSON.
-- Do not invent customer names.
-- Keep the tone professional and suitable for compliance analysts.
+- No markdown.
+- No text outside JSON.
+- No customer names.
+- No invented facts.
+- Professional compliance tone.
 """
 
 
 def extract_json(text: str) -> Optional[dict]:
+    if not text:
+        return None
+
+    cleaned = text.strip()
+
+    cleaned = cleaned.replace("```json", "")
+    cleaned = cleaned.replace("```", "")
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
+
     try:
-        return json.loads(text)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    match = re.search(r"\{.*\}", text, re.DOTALL)
+    match = re.search(r"\{[\s\S]*\}", cleaned)
 
     if not match:
         return None
@@ -205,7 +239,8 @@ def extract_json(text: str) -> Optional[dict]:
 
 def ensure_list(value) -> List[str]:
     if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned if cleaned else ["No specific information was provided by the model."]
 
     if isinstance(value, str) and value.strip():
         return [value.strip()]
